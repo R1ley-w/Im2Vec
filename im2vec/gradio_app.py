@@ -1,40 +1,22 @@
-"""Gradio app for the raster-to-SVG converter (Hugging Face Space, ZeroGPU).
+"""Gradio app for the raster-to-SVG converter (Hugging Face Space).
 
-Drag-and-drop a PNG/JPEG logo and download the predicted editable SVG. On a
-ZeroGPU Space the ``convert`` function is wrapped with ``@GPU`` so inference
-runs on the shared GPU; locally the decorator is a no-op and it falls back to
-CPU.
+Drag-and-drop a PNG/JPEG logo and download the traced SVG.
+
+Conversion is classical vector tracing via vtracer — deterministic, CPU-only
+and near-instant. There is no model, so the Space needs no GPU hardware and
+has no cold start. See ``im2vec/tracer.py`` and
+``docs/adr/0001-classical-tracing-over-generative-model.md``.
 """
 
 from __future__ import annotations
 
-import io
 import os
 import tempfile
 import urllib.parse
-from pathlib import Path
 
 import gradio as gr
-import torch
-from PIL import Image
 
-try:
-    from spaces import GPU
-except ImportError:  # pragma: no cover - local dev without the `spaces` package
-    def GPU(fn=None, duration=None):
-        def deco(f):
-            return f
-
-        if fn is not None:
-            return deco(fn)
-        return deco
-
-from .dataset import flatten_to_rgb
-from .inference import load_model, load_model_from_hub, predict_svg
-
-_MODEL = None
-_TOKENIZER = None
-_CONFIG = None
+from .tracer import trace_svg
 
 CHECKER_BG = (
     "background-image:linear-gradient(45deg,#e5e7eb 25%,transparent 25%),"
@@ -44,24 +26,6 @@ CHECKER_BG = (
     "background-size:20px 20px;"
     "background-position:0 0,0 10px,10px -10px,-10px 0;"
 )
-
-
-def _ensure_loaded() -> None:
-    """Load the model once (on CPU); called lazily and kept across requests."""
-    global _MODEL, _TOKENIZER, _CONFIG
-    if _MODEL is not None:
-        return
-    local = os.environ.get("IM2VEC_CHECKPOINT")
-    if local:
-        _MODEL, _TOKENIZER, _CONFIG, _ = load_model(
-            Path(local), device=torch.device("cpu")
-        )
-    else:
-        repo_id = os.environ.get("IM2VEC_MODEL_REPO", "R1l3y-w/im2vec-logo")
-        filename = os.environ.get("IM2VEC_MODEL_FILE", "model_epoch100.pt")
-        _MODEL, _TOKENIZER, _CONFIG, _ = load_model_from_hub(
-            repo_id, filename, device=torch.device("cpu")
-        )
 
 
 def _render_preview(svg: str) -> str:
@@ -77,25 +41,18 @@ def _render_preview(svg: str) -> str:
     )
 
 
-@GPU
-def convert(image: Image.Image | None) -> tuple[str, str | None]:
-    """Run raster-to-SVG inference; returns (preview HTML, svg file path)."""
-    if image is None:
+def convert(image_path: str | None) -> tuple[str, str | None]:
+    """Trace an uploaded raster; returns (preview HTML, svg file path)."""
+    if not image_path:
         raise gr.Error("Please upload an image first.")
 
-    _ensure_loaded()
-    max_len = _CONFIG.get("max_len", 512)
+    with open(image_path, "rb") as f:
+        data = f.read()
 
-    buf = io.BytesIO()
-    flatten_to_rgb(image).save(buf, format="PNG")
-    data = buf.getvalue()
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    _MODEL.to(device)
     try:
-        svg = predict_svg(_MODEL, _TOKENIZER, device, data, max_len)
-    finally:
-        _MODEL.to("cpu")
+        svg = trace_svg(data)
+    except ValueError as exc:
+        raise gr.Error(str(exc)) from exc
 
     tmpdir = tempfile.mkdtemp(prefix="logo-to-svg_")
     svg_path = os.path.join(tmpdir, "logo.svg")
@@ -110,22 +67,18 @@ def build_demo() -> gr.Blocks:
         gr.Markdown("# Logo to SVG")
         gr.Markdown(
             "Drop a PNG or JPEG logo to convert it into an editable SVG "
-            "vector file. The first request loads the model and may take a "
-            "few extra seconds."
+            "vector file. Conversion is instant — no model, no queue."
         )
         with gr.Row():
             with gr.Column():
                 image = gr.Image(
-                    type="pil",
+                    # "filepath" hands over the uploaded file untouched, which
+                    # matters twice: Gradio's own RGB conversion does a plain
+                    # `.convert("RGB")` (blackening transparent backgrounds),
+                    # and decoding to a PIL image would discard the format the
+                    # tracer branches on. See `tracer.params_for_format`.
+                    type="filepath",
                     label="Upload logo",
-                    # Keep the native mode (RGBA for PNGs with transparency)
-                    # instead of forcing "RGB" here: Gradio's own RGB
-                    # conversion does a plain `.convert("RGB")`, which does
-                    # NOT alpha-composite and turns transparent backgrounds
-                    # solid black before this code ever sees the image.
-                    # `convert()` above flattens onto white itself via
-                    # `flatten_to_rgb`, while alpha is still available.
-                    image_mode=None,
                     sources=["upload"],
                 )
                 convert_btn = gr.Button("Convert", variant="primary")

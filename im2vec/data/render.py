@@ -46,8 +46,7 @@ def render_svgs(
     skip_existing: bool = True,
 ) -> Tuple[int, int]:
     """Render every ``*.svg`` in ``svg_dir`` into ``png_dir`` (defaults to the
-    same directory, so PNGs and SVGs pair up for
-    :func:`im2vec.dataset.load_manifest`).
+    same directory, so PNGs and SVGs pair up by stem).
 
     Returns ``(rendered, failed)``. PNGs keep the SVG stem.
     """

@@ -1,13 +1,15 @@
-torch>=2.0
-torchvision>=0.15
-numpy
+# Tracing pipeline
+vtracer
 Pillow
-svgpathtools
+numpy
+scipy
 cairosvg
-pyarrow
+
+# Web apps
 fastapi
 uvicorn
 python-multipart
 gradio
-spaces
-huggingface_hub
+
+# Dataset tooling (im2vec/data)
+pyarrow

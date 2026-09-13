@@ -30,3 +30,7 @@ runs/
 
 # Handoff (local only)
 TRAINING_HANDOFF.md
+
+# Retired generative-model code: kept on disk for reference, not shipped.
+# Recoverable from git history at commit f707157.
+/legacy/

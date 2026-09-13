@@ -3,49 +3,27 @@
 import io
 
 import pytest
-import torch
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from im2vec.model import Im2VecModel
-from im2vec.tokenizer import SVGTokenizer
-
 
 @pytest.fixture()
-def client(tmp_path, monkeypatch):
-    """Build a tiny random-weight model and serve it through TestClient."""
-    tokenizer = SVGTokenizer()
-    model = Im2VecModel(
-        vocab_size=tokenizer.vocab_size,
-        d_model=64,
-        nhead=4,
-        num_layers=1,
-        dim_feedforward=128,
-        max_len=32,
-        backbone="resnet18",
-        pretrained=False,
-    )
-    cfg = {
-        "d_model": 64,
-        "nhead": 4,
-        "num_layers": 1,
-        "dim_feedforward": 128,
-        "max_len": 32,
-        "backbone": "resnet18",
-    }
-    checkpoint = tmp_path / "tiny.pt"
-    torch.save({"model": model.state_dict(), "config": cfg}, checkpoint)
-    monkeypatch.setenv("IM2VEC_CHECKPOINT", str(checkpoint))
-
+def client():
     from im2vec import app as app_module
 
     with TestClient(app_module.app) as c:
         yield c
 
 
-def _png_bytes() -> bytes:
+def _png_bytes(size=(64, 64), colour=(200, 30, 30)) -> bytes:
     buf = io.BytesIO()
-    Image.new("RGB", (64, 64), (200, 30, 30)).save(buf, format="PNG")
+    Image.new("RGB", size, colour).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _jpeg_bytes(size=(64, 64)) -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", size, (200, 30, 30)).save(buf, format="JPEG", quality=20)
     return buf.getvalue()
 
 
@@ -63,6 +41,24 @@ def test_convert_returns_svg(client):
     assert "<svg" in resp.json()["svg"]
 
 
+def test_convert_reports_the_real_image_dimensions(client):
+    resp = client.post(
+        "/api/convert",
+        files={"file": ("logo.png", _png_bytes(size=(123, 45)), "image/png")},
+    )
+    body = resp.json()
+    assert body["width"] == 123
+    assert body["height"] == 45
+
+
+def test_convert_accepts_jpeg(client):
+    resp = client.post(
+        "/api/convert", files={"file": ("logo.jpg", _jpeg_bytes(), "image/jpeg")}
+    )
+    assert resp.status_code == 200
+    assert "<svg" in resp.json()["svg"]
+
+
 def test_convert_rejects_wrong_type(client):
     resp = client.post(
         "/api/convert", files={"file": ("note.txt", b"hello", "text/plain")}
@@ -75,3 +71,24 @@ def test_convert_rejects_corrupt_image(client):
         "/api/convert", files={"file": ("bad.png", b"not-an-image", "image/png")}
     )
     assert resp.status_code == 422
+
+
+def test_convert_rejects_oversized_upload(client):
+    from im2vec.app import MAX_UPLOAD_BYTES
+
+    oversized = b"\x89PNG\r\n\x1a\n" + b"0" * MAX_UPLOAD_BYTES
+    resp = client.post(
+        "/api/convert", files={"file": ("big.png", oversized, "image/png")}
+    )
+    assert resp.status_code == 413
+
+
+def test_app_starts_without_a_checkpoint(client):
+    """The tracer needs no model, so there is no cold start and no download."""
+    assert not hasattr(client.app.state, "model")
+
+
+def test_app_does_not_require_torch():
+    import sys
+
+    assert "torch" not in sys.modules
