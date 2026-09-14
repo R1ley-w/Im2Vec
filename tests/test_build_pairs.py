@@ -3,7 +3,7 @@ import json
 import pyarrow.parquet as pq
 import pytest
 
-from im2vec.data.build_pairs import build_pairs, export_loose, read_pairs
+from im2vec.data.build_pairs import build_pairs, export_loose, read_pairs, spread_order
 from im2vec.pairs import LADDER
 
 from test_pairs import BUSY_SVG
@@ -127,3 +127,13 @@ def test_resume_after_the_source_set_changed_is_refused(tree, tmp_path):
     (tree / "train" / "svg" / "late.svg").write_text(BUSY_SVG)
     with pytest.raises(ValueError, match="n_sources"):
         _build(tree, out)
+
+
+def test_spread_order_is_a_permutation_whose_prefixes_span_the_range():
+    values = list(range(15, 96))
+    order = spread_order(values)
+    assert sorted(order) == values
+    first = sorted(order[:9])
+    assert first[0] == 15 and first[-1] == 95
+    gaps = [b - a for a, b in zip(first, first[1:])]
+    assert max(gaps) <= 20

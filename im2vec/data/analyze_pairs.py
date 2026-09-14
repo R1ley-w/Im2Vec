@@ -93,9 +93,8 @@ def _analyse(row: dict) -> Dict[str, object]:
 
 
 def select_rows(pairs: Path, split: str, subset: str = "ladder", limit: Optional[int] = None) -> List[dict]:
-    table = read_pairs(pairs, columns=_ROW_COLUMNS + ["subset"])
-    mask = pc.and_(pc.equal(table["split"], split), pc.equal(table["subset"], subset))
-    table = table.filter(mask)
+    wanted = (pc.field("split") == split) & (pc.field("subset") == subset)
+    table = read_pairs(pairs, columns=_ROW_COLUMNS, filter=wanted)
     if limit is not None:
         # Keep whole ladders together so every source has all qualities.
         keys = sorted(set(table.column("source_key").to_pylist()))[: max(1, limit // 5)]

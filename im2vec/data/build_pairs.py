@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from ..pairs import (
@@ -110,12 +111,22 @@ def _parts(out: Path) -> List[Path]:
     return sorted(p for p in out.glob("*/*/part-*.parquet"))
 
 
-def read_pairs(out: Path, columns: Optional[Sequence[str]] = None) -> pa.Table:
-    """Read every shard under ``out`` into one table."""
+def read_pairs(
+    out: Path,
+    columns: Optional[Sequence[str]] = None,
+    filter: Optional[pc.Expression] = None,
+) -> pa.Table:
+    """Read every shard under ``out`` into one chunked table.
+
+    ``filter`` is applied per shard. The full dataset's string columns exceed
+    Arrow's 2 GB-per-array limit, so operations that merge chunks (``take``,
+    ``combine_chunks``) fail on an unfiltered full read; filter first.
+    """
     parts = _parts(Path(out))
+    empty = SCHEMA.empty_table()
     if not parts:
-        return SCHEMA.empty_table() if columns is None else SCHEMA.empty_table().select(columns)
-    return pa.concat_tables(pq.read_table(p, columns=columns) for p in parts)
+        return empty if columns is None else empty.select(columns)
+    return pa.concat_tables(pq.read_table(p, columns=columns, filters=filter) for p in parts)
 
 
 def _done_keys(out: Path) -> Set[Tuple[str, int]]:
@@ -259,35 +270,76 @@ def build_pairs(
     return summary
 
 
+def spread_order(values: Sequence[int]) -> List[int]:
+    """Reorder sorted ``values`` so every prefix is spread across the range.
+
+    Ends first, then repeated midpoints (a binary subdivision), so taking the
+    first ``k`` gives roughly evenly spaced values for any ``k``.
+    """
+    if len(values) <= 2:
+        return list(values)
+    order = [0, len(values) - 1]
+    seen = set(order)
+    intervals = [(0, len(values) - 1)]
+    while intervals:
+        next_intervals = []
+        for lo, hi in intervals:
+            mid = (lo + hi) // 2
+            if mid not in seen:
+                order.append(mid)
+                seen.add(mid)
+            if mid - lo > 1:
+                next_intervals.append((lo, mid))
+            if hi - mid > 1:
+                next_intervals.append((mid, hi))
+        intervals = next_intervals
+    return [values[i] for i in order]
+
+
 def export_loose(out: Path, dest: Path, n: int = 50, seed: int = 0) -> List[Path]:
-    """Write ``n`` pairs as plain files for eyeballing, spread across qualities."""
-    keys = read_pairs(out, columns=["jpeg_quality"]).column(0).to_pylist()
+    """Write ``n`` pairs as plain files for eyeballing, spread across qualities.
+
+    Works shard by shard: the full dataset's string columns exceed Arrow's
+    2 GB-per-array limit, so it must never be materialised as one table.
+    """
+    index = []  # (shard, row in shard, quality)
+    for part in _parts(Path(out)):
+        qualities = pq.read_table(part, columns=["jpeg_quality"]).column(0).to_pylist()
+        index.extend((part, i, q) for i, q in enumerate(qualities))
 
     rng = random.Random(seed)
     by_quality: Dict[int, List[int]] = defaultdict(list)
-    for i, quality in enumerate(keys):
+    for i, (_, _, quality) in enumerate(index):
         by_quality[quality].append(i)
     for bucket in by_quality.values():
         rng.shuffle(bucket)
-    # Round-robin over qualities so the sample spans the compression range.
+    # Visit qualities in spread order so even a sample smaller than the
+    # number of distinct qualities spans the whole compression range.
     chosen: List[int] = []
-    while len(chosen) < min(n, len(keys)):
-        for q in sorted(by_quality):
+    order = spread_order(sorted(by_quality))
+    while len(chosen) < min(n, len(index)):
+        for q in order:
             if by_quality[q] and len(chosen) < n:
                 chosen.append(by_quality[q].pop())
 
+    by_part: Dict[Path, List[int]] = defaultdict(list)
+    for i in chosen:
+        part, row, _ = index[i]
+        by_part[part].append(row)
+
     written: List[Path] = []
-    for row in read_pairs(out).take(chosen).to_pylist():
-        name = f"{row['dataset']}_{row['split']}_{row['source_id']}_q{row['jpeg_quality']}"
-        d = Path(dest) / name
-        d.mkdir(parents=True, exist_ok=True)
-        (d / "source.svg").write_text(row.pop("source_svg"))
-        (d / "clean.png").write_bytes(row.pop("clean_png"))
-        (d / "compressed.jpg").write_bytes(row.pop("jpeg"))
-        (d / "clean_trace.svg").write_text(row.pop("clean_trace"))
-        (d / "messy_trace.svg").write_text(row.pop("messy_trace"))
-        (d / "info.json").write_text(json.dumps(row, indent=2) + "\n")
-        written.append(d)
+    for part, rows in by_part.items():
+        for row in pq.read_table(part).take(rows).to_pylist():
+            name = f"{row['dataset']}_{row['split']}_{row['source_id']}_q{row['jpeg_quality']}"
+            d = Path(dest) / name
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "source.svg").write_text(row.pop("source_svg"))
+            (d / "clean.png").write_bytes(row.pop("clean_png"))
+            (d / "compressed.jpg").write_bytes(row.pop("jpeg"))
+            (d / "clean_trace.svg").write_text(row.pop("clean_trace"))
+            (d / "messy_trace.svg").write_text(row.pop("messy_trace"))
+            (d / "info.json").write_text(json.dumps(row, indent=2) + "\n")
+            written.append(d)
     return written
 
 
