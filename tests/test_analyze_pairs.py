@@ -5,6 +5,7 @@ import pytest
 from im2vec.data.analyze_pairs import (
     aggregate_curve,
     gate2,
+    messiness_curve,
     per_image_headroom,
     run,
     summarise,
@@ -73,7 +74,18 @@ def test_run_and_summarise_end_to_end(tmp_path):
     result = run(tmp_path / "pairs", out, split="valid", workers=2)
     assert result == {"pairs": 5, "analysed": 5, "errors": 0}
 
-    summary = summarise(out)
+    summary = summarise(out, tmp_path / "pairs")
     assert summary["pairs"] == 5
+    assert set(summary["messiness_curve"]["all"]) == {"15", "30", "50", "75", "95"}
     assert set(summary["by_quality"]) == {"15", "30", "50", "75", "95"}
     json.loads((out / "summary.json").read_text())
+
+
+def test_messiness_curve_groups_by_dataset_and_quality():
+    row = dict(dataset="svg-emoji", clean_tokens=100, messy_tokens=400, clean_paths=5,
+               messy_paths=50, clean_rmse=10.0, messy_rmse=12.0, jpeg_rmse=6.0)
+    rows = [dict(row, jpeg_quality=15), dict(row, jpeg_quality=95, messy_tokens=150)]
+    curve = messiness_curve(rows)
+    assert curve["all"]["15"]["token_ratio"]["median"] == pytest.approx(4.0)
+    assert curve["svg-emoji"]["95"]["token_ratio"]["median"] == pytest.approx(1.5)
+    assert curve["all"]["15"]["path_ratio"]["median"] == pytest.approx(10.0)

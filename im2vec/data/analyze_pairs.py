@@ -227,7 +227,37 @@ def gate2(excess: List[dict]) -> Dict[str, object]:
     }
 
 
-def summarise(out: Path) -> Dict[str, object]:
+_CURVE_COLUMNS = ["dataset", "jpeg_quality", "clean_tokens", "messy_tokens", "clean_paths",
+                  "messy_paths", "clean_rmse", "messy_rmse", "jpeg_rmse"]
+
+
+def messiness_curve(rows: List[dict]) -> Dict[str, object]:
+    """Compression -> messiness: how the messy trace degrades with JPEG quality.
+
+    Built from ladder pairs, where every source appears at every quality, so
+    each quality's statistics describe the same images.
+    """
+    def stats(group: List[dict]) -> Dict[str, object]:
+        return {
+            "pairs": len(group),
+            "token_ratio": _quantiles([r["messy_tokens"] / r["clean_tokens"] for r in group]),
+            "path_ratio": _quantiles([r["messy_paths"] / max(r["clean_paths"], 1) for r in group]),
+            "messy_tokens": _quantiles([r["messy_tokens"] for r in group]),
+            "jpeg_rmse": _quantiles([r["jpeg_rmse"] for r in group]),
+            "messy_minus_clean_rmse": _quantiles([r["messy_rmse"] - r["clean_rmse"] for r in group]),
+        }
+
+    curve: Dict[str, object] = {}
+    for dataset in ["all"] + sorted({r["dataset"] for r in rows}):
+        subset = rows if dataset == "all" else [r for r in rows if r["dataset"] == dataset]
+        curve[dataset] = {
+            str(q): stats([r for r in subset if r["jpeg_quality"] == q])
+            for q in sorted({r["jpeg_quality"] for r in subset})
+        }
+    return curve
+
+
+def summarise(out: Path, pairs: Optional[Path] = None) -> Dict[str, object]:
     sweep = pq.read_table(out / "sweep.parquet").to_pylist()
     excess = pq.read_table(out / "excess.parquet").to_pylist()
     qualities = sorted({e["jpeg_quality"] for e in excess})
@@ -256,6 +286,9 @@ def summarise(out: Path) -> Dict[str, object]:
             for d in sorted({e["dataset"] for e in excess})
         },
     }
+    if pairs is not None:
+        ladder = read_pairs(pairs, columns=_CURVE_COLUMNS, filter=pc.field("subset") == "ladder")
+        summary["messiness_curve"] = messiness_curve(ladder.to_pylist())
     (out / "summary.json").write_text(json.dumps(summary, indent=2, default=float) + "\n")
     return summary
 
@@ -275,7 +308,7 @@ def main() -> None:
     args = parse_args()
     if not args.summary_only:
         print(json.dumps(run(args.pairs, args.out, args.split, args.workers, args.limit)))
-    summarise(args.out)
+    summarise(args.out, args.pairs)
     print(f"wrote {args.out / 'summary.json'}")
 
 
