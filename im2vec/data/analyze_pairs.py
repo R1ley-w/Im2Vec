@@ -234,6 +234,46 @@ def slack_curve(
     return out
 
 
+def shipped_branch(sweep: List[dict]) -> Dict[str, object]:
+    """How far the tracer's shipped JPEG settings are from the best available.
+
+    Two comparisons: the best of every swept setting chosen per image (an
+    oracle, since the choice uses the source raster), and the best single
+    setting per JPEG quality, judged on median tokens and RMSE.
+    """
+    by_pair: Dict[tuple, Dict[str, tuple]] = {}
+    for r in sweep:
+        by_pair.setdefault((r["source_key"], r["jpeg_quality"]), {})[r["label"]] = (r["tokens"], r["rmse"])
+
+    def oracle(cells: List[Dict[str, tuple]]) -> Dict[str, object]:
+        saved, gained = [], []
+        for cfg in cells:
+            tokens, error = cfg[_SHIPPED_LABEL]
+            saved.append(1 - min(t for t, r in cfg.values() if r <= error) / tokens)
+            gained.append(error - min(r for t, r in cfg.values() if t <= tokens))
+        return {
+            "tokens_saved_at_no_worse_rmse": _quantiles(saved),
+            "rmse_gained_at_no_more_tokens": _quantiles(gained),
+            "share_saving_above_gate1_threshold": float(np.mean([v > GATE1_THRESHOLD for v in saved])),
+        }
+
+    out: Dict[str, object] = {"shipped": _SHIPPED_LABEL, "per_image_best": {"all": oracle(list(by_pair.values()))},
+                              "best_fixed_setting_per_quality": {}}
+    for q in sorted({q for _, q in by_pair}):
+        cells = [cfg for (_, qq), cfg in by_pair.items() if qq == q]
+        out["per_image_best"][str(q)] = oracle(cells)
+        medians = {label: (float(np.median([c[label][0] for c in cells])), float(np.median([c[label][1] for c in cells])))
+                   for label in cells[0]}
+        tokens, error = medians[_SHIPPED_LABEL]
+        best_tokens, best_label = min((t, l) for l, (t, r) in medians.items() if r <= error)
+        out["best_fixed_setting_per_quality"][str(q)] = {
+            "shipped": {"tokens": tokens, "rmse": error},
+            "best": {"label": best_label, "tokens": best_tokens, "rmse": medians[best_label][1]},
+            "tokens_saved": 1 - best_tokens / tokens,
+        }
+    return out
+
+
 def per_image_headroom(sweep: List[dict], excess: List[dict]) -> Dict[str, object]:
     """Headroom per (source, quality) against that image's own frontier."""
     fronts = _image_fronts(sweep)
@@ -321,6 +361,7 @@ def summarise(out: Path, pairs: Optional[Path] = None) -> Dict[str, object]:
 
     summary = {
         "thresholds": {"gate1": GATE1_THRESHOLD, "gate2": GATE2_THRESHOLD},
+        "shipped_branch": shipped_branch(sweep),
         "sources": len({e["source_key"] for e in excess}),
         "pairs": len(excess),
         "datasets": sorted({e["dataset"] for e in excess}),

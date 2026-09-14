@@ -37,24 +37,33 @@ JPEG q20 in → 12.23 RMSE / 0.939 SSIM / median 6 paths.
 ## Layout
 
 ```
-CONTEXT.md         # domain glossary
+CONTEXT.md           # domain glossary
+docs/
+  adr/               # architecture decisions
+  phase2/            # Phase 2 results and summary.json
 im2vec/
-  tracer.py        # trace_svg() — the conversion path
-  raster.py        # alpha-safe raster normalization
-  metrics.py       # fidelity metrics (RMSE / L1 / SSIM / IoU), torch-free
-  tokenizer.py     # SVG <-> token sequence; used to measure compactness
-  app.py           # FastAPI app + static frontend
-  gradio_app.py    # Gradio app
+  tracer.py          # trace_svg() — the conversion path
+  raster.py          # alpha-safe raster normalization
+  metrics.py         # fidelity metrics (RMSE / L1 / SSIM / IoU), torch-free
+  tokenizer.py       # SVG <-> token sequence; used to measure compactness
+  app.py             # FastAPI app + static frontend
+  gradio_app.py      # Gradio app
+  pairs.py           # (clean, messy) trace pair synthesis
+  frontier.py        # classical frontier over tracer settings
+  excess.py          # droppable / mergeable / distorted excess paths
   data/
-    download.py    # fetch SVG datasets from the HF Hub (parquet)
-    render.py      # rasterize SVGs -> PNGs
-    prepare.py     # one-command download + render
+    download.py      # fetch SVG datasets from the HF Hub (parquet)
+    render.py        # rasterize SVGs -> PNGs
+    prepare.py       # one-command download + render
+    build_pairs.py   # build the trace-pair dataset (parquet)
+    analyze_pairs.py # frontier + excess measurements over the pairs
 tests/
 ```
 
 ## Environment
 
-Everything runs in a plain Python environment — no torch, no CUDA:
+Everything runs in a plain Python environment — no torch, no CUDA. Use
+**Python 3.12**: vtracer 0.6.15's wheel segfaults on Python 3.14.
 
 ```bash
 pip install -r requirements.txt
@@ -101,7 +110,39 @@ entirely client-side as a free static site.
 ## Tests
 
 ```bash
+pip install -r requirements-dev.txt
 python -m pytest tests/ -q
+```
+
+## Measuring trace quality
+
+Phase 2 ([#2](https://github.com/R1ley-w/JPG-to-SVG-web-tool/issues/2))
+built tooling to measure how JPEG compression bloats traces and how close
+tracer settings get to the best possible trade-off. Results are in
+[`docs/phase2/results.md`](docs/phase2/results.md). In short, the shipped
+JPEG branch is within a few percent of the frontier, and a neural cleanup
+model has no room to help
+([ADR 0002](docs/adr/0002-no-neural-trace-cleanup.md)).
+
+The tools read the Hugging Face layout of the source datasets,
+`data/svg-emoji-hf/` and `data/svg-stack-hf/` (not the flat `data/svg-*/`
+directories `prepare` writes):
+
+```python
+from huggingface_hub import snapshot_download
+snapshot_download("R1l3y-w/im2vec-svg-emoji", repo_type="dataset",
+                  local_dir="data/svg-emoji-hf", allow_patterns=["*.svg", "*.md"])
+snapshot_download("R1l3y-w/im2vec-svg-stack-sample", repo_type="dataset",
+                  local_dir="data/svg-stack-hf", allow_patterns=["*.svg", "*.md"])
+```
+
+The PNGs in those repos are not needed. Both repos hold ~46k loose files, so
+expect Hugging Face rate limiting (5,000 requests per 5 minutes); re-run the
+call if it stops, and completed files are skipped.
+
+```bash
+python -m im2vec.data.build_pairs --out data/pairs      # ~65k pairs, ~15 min on 24 cores
+python -m im2vec.data.analyze_pairs --pairs data/pairs --out data/analysis
 ```
 
 ## Background — the retired model
@@ -126,9 +167,9 @@ That code is retired to a gitignored `legacy/` and remains in history at
 
 ## Background — the SVG datasets
 
-These were sourced to train the retired generative model. They are kept
-because the planned trace-cleanup experiment ([#2](https://github.com/R1ley-w/JPG-to-SVG-web-tool/issues/2))
-reuses them as its source of clean SVGs.
+These were sourced to train the retired generative model. Phase 2
+([#2](https://github.com/R1ley-w/JPG-to-SVG-web-tool/issues/2)) reused them
+as its source of clean SVGs.
 
 | `--dataset` | Source | Rows (train) | Color | License |
 |---|---|---|---|---|
@@ -164,7 +205,9 @@ path, use `flatten_to_rgb`.
 
 ## Status
 
-The tracing app is complete. Whether a neural **cleanup** model gets built at
-all is gated on measurement — see
-[#2](https://github.com/R1ley-w/JPG-to-SVG-web-tool/issues/2) and
-[#3](https://github.com/R1ley-w/JPG-to-SVG-web-tool/issues/3).
+The tracing app is complete, and tracing is the whole conversion path.
+Phase 2 measured whether a neural cleanup model could improve traces of
+compressed images. It could not beat the classical frontier, so Phase 3 was
+discarded
+([ADR 0002](docs/adr/0002-no-neural-trace-cleanup.md),
+[results](docs/phase2/results.md)).

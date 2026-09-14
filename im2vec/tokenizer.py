@@ -1,7 +1,9 @@
 """SVG <-> token sequence.
 
-The network predicts SVG as a sequence of tokens. We normalize arbitrary SVG
-input into a small, self-contained subset:
+Written for the retired generative model (ADR 0001), which predicted SVG as
+tokens. It now serves as the project's measure of **compactness**: a trace's
+token count. Arbitrary SVG input is normalized into a small, self-contained
+subset:
 
     commands : M L C Z          (absolute coordinates, cubic Bezier)
     paint    : flat RGB fill, or an outline stroke (color + width)

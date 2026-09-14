@@ -1,5 +1,7 @@
 # Phase 2 results — trace pairs and the Phase 3 gates
 
+**Status: complete. Phase 3 discarded.**
+
 Issue [#2](https://github.com/R1ley-w/JPG-to-SVG-web-tool/issues/2). Gates
 defined in [#3](https://github.com/R1ley-w/JPG-to-SVG-web-tool/issues/3).
 Vocabulary: [`CONTEXT.md`](../../CONTEXT.md). Raw numbers:
@@ -9,13 +11,13 @@ Vocabulary: [`CONTEXT.md`](../../CONTEXT.md). Raw numbers:
 
 | gate | threshold | measured (valid ladder, 1,960 pairs) | reading |
 |---|---|---|---|
-| 1. token headroom over the classical frontier at equal-or-better RMSE | >25% | per-image median **2%**; only **22%** of pairs exceed 25% | **fails** overall; passes only at q15 |
+| 1. token headroom over the classical frontier at equal-or-better RMSE | >25% | per-image median **2%**; only **22%** of pairs exceed 25% | **fails** (only q15 would pass) |
 | 2. share of excess paths droppable/mergeable | >60% | pooled **73%**; per-image median 69% | **passes** at every quality |
 
-Gate 1 fails in the reading this report argues is the only stable one
-(per image, see [below](#gate-1--frontier-headroom)). Its wording leaves one
-choice open, flagged under [decisions needed](#decisions-needed). Under
-#3's own rule, "If (1) fails there is no room for a model".
+Gate 1 is judged per image, the only stable reading (see
+[below](#gate-1--frontier-headroom)). Under #3's own rule, "If (1) fails
+there is no room for a model". **Phase 3 is discarded**; see
+[Outcome](#outcome) and [ADR 0002](../adr/0002-no-neural-trace-cleanup.md).
 
 The gates also disagree in a way that matters for #3's leading candidate,
 per-path classification. Excess **paths** are mostly removable (gate 2), but
@@ -68,8 +70,8 @@ Tokens blow up far faster than fidelity drops: at q50 the messy trace is
 ## Measurement set
 
 Gates were measured on the **valid** split's ladder: 392 sources (72 emoji,
-320 svg-stack) x 5 qualities = 1,960 pairs, 0 errors. `test` is untouched,
-kept for evaluating any Phase 3 model.
+320 svg-stack) x 5 qualities = 1,960 pairs, 0 errors. `test` was held out
+for a Phase 3 model and is unused.
 
 `python -m im2vec.data.analyze_pairs --pairs data/pairs --out data/analysis` (about 6 min).
 
@@ -154,28 +156,28 @@ and 98% at +3.0. Dropping speckle removes paths, not tokens. Median
 tokens go from 3,584 (defaults) to 2,616, still far above frontier points
 of similar fidelity.
 
-## Implications for #3
+## Is the shipped JPEG branch good enough?
 
-- Under #3's rule, gate 1 failing means **no room for a model** on typical
-  input. If anything survives, it is a model scoped to **heavily compressed
-  input (q≤30)**, where per-image headroom is 16-30%.
-- Per-path keep/drop/merge classification is supported on paths (gate 2)
-  but **not on tokens**. A cleanup that recovers compactness would have to
-  regenerate boundary geometry, which is the generation problem #3 calls
-  "probably not worth it".
+Yes. With the source raster in hand, the best of the 72 settings chosen
+separately for each image beats the shipped branch (`sp16_cp5_ld16`) by
+only **2.8%** of tokens at median, at no worse RMSE. The shipped branch is
+itself the best single setting at q15 and q30; at q50, q75 and q95 the
+best alternative saves 1.7%, 3.0% and 6.5% (`shipped_branch` in
+`summary.json`). A per-image
+settings selector is not worth building.
 
-## Decisions needed
+## Outcome
 
-1. **How gate 1 is read.** This report argues for per-image headroom
-   against the clean trace, overall. On that reading gate 1 fails. The
-   aggregate reading can be made to pass or fail by choosing the slack, which
-   is why it isn't used. If the gate was meant to be judged per quality
-   band, q15 passes.
-2. **Abandon, or re-scope to q≤30.** The gates were fixed in advance on
-   purpose, so this is a call for you rather than something to tune.
-3. **Publishing `R1l3y-w/svg-trace-cleanup-pairs`** (private, per #2) is not
-   done. Creating the repo and uploading 2.2 GB needs your go-ahead, and it
-   may not be worth publishing if Phase 3 is abandoned.
+Recorded in [ADR 0002](../adr/0002-no-neural-trace-cleanup.md):
+
+1. **Gate 1 is judged per image**, and fails. The aggregate reading is not
+   used because the slack value decides it.
+2. **Phase 3 is discarded**, not re-scoped to q≤30. The q15 headroom would
+   need regenerated boundary geometry (a drop-only oracle is 64% worse than
+   the frontier there), it is an upper bound, and picking the band after
+   seeing the results defeats gates fixed in advance.
+3. **The pair dataset is not published.** It existed to train a model.
+   It stays local, reproducible with the commands below.
 
 ## Caveats
 
@@ -194,11 +196,9 @@ of similar fidelity.
 - **Merges are scored as repaints**, not real geometric unions. Path counts
   after a merge are exact, but a token count for merged traces was not
   measured.
-- **Possible product follow-up, low confidence:** settings with
-  `layer_difference=64` recur on the frontier. Per image, `sp8_cp5_ld64`
-  versus the shipped `sp16_cp5_ld16` has a median token change of 0% but
-  mean RMSE -1.49, with the gain concentrated in a tail of hard images. Worth
-  a proper look before changing `JPEG_PARAMS`.
+- **Headroom is measured in-sample** on the valid split. It was not tuned
+  on it; the only choice made after seeing the data was how to read gate 1,
+  explained above.
 
 ## Reproduce
 

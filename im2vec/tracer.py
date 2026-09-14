@@ -80,9 +80,12 @@ def params_for_format(image_format: Optional[str]) -> Dict[str, Any]:
     """Pick tracing parameters from Pillow's detected format.
 
     Format is a *proxy* for compression, not a measurement of it: a PNG
-    re-encoded from a JPEG gets the lossless branch and traces badly. Phase 2
-    characterises the compression/messiness relationship properly; until then
-    this one branch captures most of the available win.
+    re-encoded from a JPEG gets the lossless branch and traces badly.
+
+    Phase 2 measured how close the JPEG branch is to the best available
+    settings (``docs/phase2/results.md``): the best of 72 settings, chosen
+    per image with the source raster in hand, saves only ~3% of tokens at
+    median, and no single setting beats it at q15-q30.
     """
     if image_format and image_format.upper() in _LOSSY_FORMATS:
         return JPEG_PARAMS

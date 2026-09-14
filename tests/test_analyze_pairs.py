@@ -8,6 +8,7 @@ from im2vec.data.analyze_pairs import (
     messiness_curve,
     per_image_headroom,
     run,
+    shipped_branch,
     slack_curve,
     summarise,
 )
@@ -100,3 +101,23 @@ def test_slack_curve_makes_unreachable_references_comparable():
     assert curve["0.0"]["per_image_reachable_share"] == 0.0
     assert curve["1.0"]["aggregate_median_headroom"] == pytest.approx(0.4)  # vs 100 tokens
     assert curve["3.0"]["per_image_headroom"]["median"] == pytest.approx(0.25)  # vs 80 tokens
+
+
+def test_shipped_branch_compares_against_per_image_best_and_best_fixed_setting():
+    # Image a: a cheaper setting matches the shipped RMSE. Image b: no saving.
+    sweep = _sweep("a", 15, [("sp16_cp5_ld16", 100, 12.0), ("sp8_cp5_ld64", 60, 12.0), ("sp4_cp6_ld16", 300, 9.0)]) \
+        + _sweep("b", 15, [("sp16_cp5_ld16", 100, 12.0), ("sp8_cp5_ld64", 100, 12.0), ("sp4_cp6_ld16", 300, 11.0)])
+    result = shipped_branch(sweep)
+    assert result["shipped"] == "sp16_cp5_ld16"
+    saved = result["per_image_best"]["15"]["tokens_saved_at_no_worse_rmse"]
+    assert saved["mean"] == pytest.approx(0.2)  # 40% on a, 0% on b
+    fixed = result["best_fixed_setting_per_quality"]["15"]
+    # sp8_cp5_ld64: median 80 tokens at median RMSE 12.0, no worse than shipped.
+    assert fixed["best"]["label"] == "sp8_cp5_ld64"
+    assert fixed["tokens_saved"] == pytest.approx(0.2)
+
+
+def test_shipped_branch_keeps_shipped_when_nothing_cheaper_is_as_faithful():
+    sweep = _sweep("a", 15, [("sp16_cp5_ld16", 100, 12.0), ("sp8_cp5_ld64", 60, 13.0)])
+    fixed = shipped_branch(sweep)["best_fixed_setting_per_quality"]["15"]
+    assert fixed["best"]["label"] == "sp16_cp5_ld16" and fixed["tokens_saved"] == 0.0

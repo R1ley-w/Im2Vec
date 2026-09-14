@@ -42,6 +42,12 @@ compactness, and vice versa. Tracer settings move along it; they do not
 escape it.
 _Avoid_: Optimum, best settings, sweet spot
 
+**Headroom**:
+The share of tokens a reference trace saves over the cheapest frontier trace
+of equal-or-better fidelity. Judged per image: each image has its own
+frontier. Undefined when no tracer setting reaches the reference's fidelity.
+_Avoid_: Improvement, gain, savings
+
 ### Compression damage
 
 **Messy**:

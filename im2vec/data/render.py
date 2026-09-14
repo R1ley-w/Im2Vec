@@ -1,7 +1,7 @@
-"""Render downloaded FIGR-8 SVGs to paired PNG rasters.
+"""Render downloaded SVGs to paired PNG rasters.
 
-Renders at ``size x size`` (default 256) to match the model's input transform
-and the tokenizer's normalized canvas.
+Renders at ``size x size`` (default 256), matching the canvas used by the
+fidelity metrics and the tokenizer.
 
 Usage::
 
@@ -79,7 +79,7 @@ def render_svgs(
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Render FIGR-8 SVGs to PNG")
+    p = argparse.ArgumentParser(description="Render SVGs to PNG")
     p.add_argument("--svg-dir", type=Path, required=True)
     p.add_argument("--png-dir", type=Path, default=None)
     p.add_argument("--size", type=int, default=DEFAULT_SIZE)
