@@ -184,6 +184,55 @@ def aggregate_curve(sweep: List[dict], excess: List[dict], stat: str = "median")
     }
 
 
+#: RMSE slack (0-255 scale) granted to the frontier when comparing it with a
+#: reference trace whose fidelity no swept setting reaches.
+SLACKS = (0.0, 0.25, 0.5, 1.0, 1.5, 2.0, 3.0)
+
+
+def slack_curve(
+    sweep: List[dict], excess: List[dict], tokens_key: str = "clean_tokens",
+    rmse_key: str = "clean_rmse", slacks: Sequence[float] = SLACKS,
+) -> Dict[str, object]:
+    """Headroom when the frontier may be up to ``slack`` RMSE worse than the reference.
+
+    The reference (e.g. the clean trace) often has better fidelity than any
+    setting reaches, so strict equal-or-better headroom is undefined. This
+    shows how the answer depends on the slack allowed: per image (share of
+    images with a frontier point within the slack, and their headroom), and
+    on the median aggregate curve.
+    """
+    points: Dict[tuple, List[FrontierPoint]] = {}
+    for r in sweep:
+        points.setdefault((r["source_key"], r["jpeg_quality"]), []).append(
+            FrontierPoint(r["label"], r["tokens"], r["rmse"]))
+    fronts = {k: pareto_front(v) for k, v in points.items()}
+
+    by_label: Dict[str, Dict[str, List[float]]] = {}
+    for r in sweep:
+        d = by_label.setdefault(r["label"], {"tokens": [], "rmse": []})
+        d["tokens"].append(r["tokens"])
+        d["rmse"].append(r["rmse"])
+    aggregate = pareto_front([FrontierPoint(l, float(np.median(d["tokens"])), float(np.median(d["rmse"])))
+                              for l, d in by_label.items()])
+    ref_tokens = float(np.median([e[tokens_key] for e in excess]))
+    ref_rmse = float(np.median([e[rmse_key] for e in excess]))
+
+    out = {}
+    for slack in slacks:
+        values = []
+        for e in excess:
+            h = headroom(fronts[(e["source_key"], e["jpeg_quality"])], e[tokens_key], e[rmse_key] + slack)
+            if h is not None:
+                values.append(h)
+        out[str(slack)] = {
+            "aggregate_median_headroom": headroom(aggregate, ref_tokens, ref_rmse + slack),
+            "per_image_reachable_share": len(values) / len(excess) if excess else None,
+            "per_image_headroom": _quantiles(values),
+            "per_image_share_above_threshold": float(np.mean([h > GATE1_THRESHOLD for h in values])) if values else None,
+        }
+    return out
+
+
 def per_image_headroom(sweep: List[dict], excess: List[dict]) -> Dict[str, object]:
     """Headroom per (source, quality) against that image's own frontier."""
     points: Dict[tuple, List[FrontierPoint]] = {}
@@ -267,6 +316,8 @@ def summarise(out: Path, pairs: Optional[Path] = None) -> Dict[str, object]:
             "gate1_aggregate_median": aggregate_curve(sw, ex, "median"),
             "gate1_aggregate_mean": aggregate_curve(sw, ex, "mean"),
             "gate1_per_image": per_image_headroom(sw, ex),
+            "gate1_slack_clean": slack_curve(sw, ex),
+            "gate1_slack_dropped_only": slack_curve(sw, ex, "dropped_only_tokens", "dropped_only_rmse"),
             "gate2": gate2(ex),
         }
 

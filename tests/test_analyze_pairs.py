@@ -8,6 +8,7 @@ from im2vec.data.analyze_pairs import (
     messiness_curve,
     per_image_headroom,
     run,
+    slack_curve,
     summarise,
 )
 from im2vec.data.build_pairs import build_pairs
@@ -89,3 +90,13 @@ def test_messiness_curve_groups_by_dataset_and_quality():
     assert curve["all"]["15"]["token_ratio"]["median"] == pytest.approx(4.0)
     assert curve["svg-emoji"]["95"]["token_ratio"]["median"] == pytest.approx(1.5)
     assert curve["all"]["15"]["path_ratio"]["median"] == pytest.approx(10.0)
+
+
+def test_slack_curve_makes_unreachable_references_comparable():
+    sweep = _sweep("a", 15, CURVE)
+    excess = [_excess("a", 15, clean_tokens=60, clean_rmse=9.0)]  # best setting is RMSE 10
+    curve = slack_curve(sweep, excess, slacks=(0.0, 1.0, 3.0))
+    assert curve["0.0"]["aggregate_median_headroom"] is None
+    assert curve["0.0"]["per_image_reachable_share"] == 0.0
+    assert curve["1.0"]["aggregate_median_headroom"] == pytest.approx(0.4)  # vs 100 tokens
+    assert curve["3.0"]["per_image_headroom"]["median"] == pytest.approx(0.25)  # vs 80 tokens
