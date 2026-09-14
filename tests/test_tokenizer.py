@@ -69,7 +69,7 @@ def test_arc_stays_near_circle():
     from im2vec.tokenizer import _arc_to_cubics
 
     segs = _arc_to_cubics(128 - 64, 128, 64, 64, 0, True, False, 128 + 64, 128)
-    for c1x, c1y, c2x, c2y, x, y in segs:
+    for *_controls, x, y in segs:
         for px, py in ((x, y),):
             r = math.hypot(px - 128, py - 128)
             assert abs(r - 64) < 1e-6

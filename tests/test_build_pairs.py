@@ -72,7 +72,7 @@ def test_rebuild_resumes_without_duplicates(tree, tmp_path):
     assert second["skipped"] == first["planned"]
     assert second["written"] == 0 and second["failed"] == 0
     table = read_pairs(out)
-    pairs = list(zip(table.column("source_key").to_pylist(), table.column("jpeg_quality").to_pylist()))
+    pairs = list(zip(table.column("source_key").to_pylist(), table.column("jpeg_quality").to_pylist(), strict=True))
     assert len(pairs) == len(set(pairs))
 
 
@@ -135,5 +135,5 @@ def test_spread_order_is_a_permutation_whose_prefixes_span_the_range():
     assert sorted(order) == values
     first = sorted(order[:9])
     assert first[0] == 15 and first[-1] == 95
-    gaps = [b - a for a, b in zip(first, first[1:])]
+    gaps = [b - a for a, b in zip(first, first[1:], strict=False)]
     assert max(gaps) <= 20

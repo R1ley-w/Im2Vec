@@ -58,7 +58,7 @@ SWEEP: List[Tuple[str, Dict[str, int]]] = [
 @dataclass(frozen=True)
 class FrontierPoint:
     label: str
-    tokens: int
+    tokens: float  # an int per trace; a median or mean on aggregate curves
     rmse: float
     paths: int = 0
 
@@ -91,7 +91,7 @@ def pareto_front(points: Sequence[FrontierPoint]) -> List[FrontierPoint]:
     return front
 
 
-def tokens_at(front: Sequence[FrontierPoint], max_rmse: float) -> Optional[int]:
+def tokens_at(front: Sequence[FrontierPoint], max_rmse: float) -> Optional[float]:
     """Fewest tokens on the frontier with RMSE at or below ``max_rmse``."""
     meeting = [p.tokens for p in front if p.rmse <= max_rmse]
     return min(meeting) if meeting else None

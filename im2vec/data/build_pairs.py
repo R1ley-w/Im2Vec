@@ -114,11 +114,11 @@ def _parts(out: Path) -> List[Path]:
 def read_pairs(
     out: Path,
     columns: Optional[Sequence[str]] = None,
-    filter: Optional[pc.Expression] = None,
+    where: Optional[pc.Expression] = None,
 ) -> pa.Table:
     """Read every shard under ``out`` into one chunked table.
 
-    ``filter`` is applied per shard. The full dataset's string columns exceed
+    ``where`` is applied per shard. The full dataset's string columns exceed
     Arrow's 2 GB-per-array limit, so operations that merge chunks (``take``,
     ``combine_chunks``) fail on an unfiltered full read; filter first.
     """
@@ -126,13 +126,13 @@ def read_pairs(
     empty = SCHEMA.empty_table()
     if not parts:
         return empty if columns is None else empty.select(columns)
-    return pa.concat_tables(pq.read_table(p, columns=columns, filters=filter) for p in parts)
+    return pa.concat_tables(pq.read_table(p, columns=columns, filters=where) for p in parts)
 
 
 def _done_keys(out: Path) -> Set[Tuple[str, int]]:
     done: Set[Tuple[str, int]] = set()
     table = read_pairs(out, columns=_KEY_COLUMNS)
-    done.update(zip(table.column(0).to_pylist(), table.column(1).to_pylist()))
+    done.update(zip(table.column(0).to_pylist(), table.column(1).to_pylist(), strict=True))
     failures = out / "failures.jsonl"
     if failures.exists():
         for line in failures.read_text().splitlines():

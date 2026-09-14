@@ -89,7 +89,7 @@ class ExcessReport:
     dropped_only_rmse: float
     repaired_svg: str
     dropped_only_svg: str
-    rounds: int
+    rounds: int  # greedy rounds that removed at least one path
 
 
 def parse_trace(svg: str) -> List[TracePath]:
@@ -152,6 +152,14 @@ def paint_layers(
     return top, second
 
 
+def _paint_error(colour: np.ndarray, count: int, ref_sum: np.ndarray, ref_sq: float) -> float:
+    """Summed squared error of painting ``count`` pixels in one colour.
+
+    Expands sum((colour - ref)^2) so candidate colours cost O(1) each.
+    """
+    return count * float(colour @ colour) - 2 * float(colour @ ref_sum) + ref_sq
+
+
 def _render_rmse(svg: str, reference: np.ndarray, size: int) -> float:
     return rmse(reference, rgb_over_white(render_svg(svg, size), size)) * 255.0
 
@@ -202,7 +210,7 @@ def classify_excess(
     frozen[:1] = True
     dropped = merged = rounds = 0
 
-    for rounds in range(1, max_rounds + 1):
+    for _ in range(max_rounds):
         top, second = paint_layers(masks, alive)
         slices = find_objects(top + 1, max_label=n)
         candidates = []  # (cost, index, target or -1 for drop, revealed ids)
@@ -217,13 +225,8 @@ def classify_excess(
             crop_top, crop_second = top[box], second[box]
             visible = crop_top == p
             r = ref[box][visible]
-            k = len(r)
-            r_sum, r_sq = r.sum(axis=0), ref_sq[box][visible].sum()
-
-            def cost_of(colour: np.ndarray) -> float:
-                return k * float(colour @ colour) - 2 * float(colour @ r_sum) + r_sq
-
-            current = cost_of(colours[p])
+            pixel_stats = (len(r), r.sum(axis=0), ref_sq[box][visible].sum())
+            current = _paint_error(colours[p], *pixel_stats)
 
             below = crop_second[visible]
             revealed = tuple(int(i) for i in np.unique(below) if i >= 0)
@@ -239,7 +242,7 @@ def classify_excess(
             neighbours.discard(p)
             best = None
             for q in neighbours:
-                merge_cost = cost_of(colours[q]) - current
+                merge_cost = _paint_error(colours[q], *pixel_stats) - current
                 if merge_cost <= tolerance + _EPS and (best is None or merge_cost < best[0]):
                     best = (merge_cost, q)
             if best is not None:
@@ -248,7 +251,7 @@ def classify_excess(
         removed: Set[int] = set()
         protected: Set[int] = set()
         accepted = 0
-        for cost, p, target, revealed in sorted(candidates, key=lambda c: (c[0], c[1])):
+        for _, p, target, revealed in sorted(candidates, key=lambda c: (c[0], c[1])):
             if p in removed or p in protected:
                 continue
             if target < 0:
@@ -270,6 +273,7 @@ def classify_excess(
             accepted += 1
         if not accepted:
             break
+        rounds += 1
 
     excess = max(n - clean_paths, 0)
     removed_total = dropped + merged

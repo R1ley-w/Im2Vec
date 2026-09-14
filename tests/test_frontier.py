@@ -1,7 +1,4 @@
-import io
-
 import pytest
-from PIL import Image
 
 from im2vec.frontier import (
     SWEEP,
@@ -13,7 +10,7 @@ from im2vec.frontier import (
 )
 from im2vec.metrics import render_svg, rgb_over_white
 from im2vec.pairs import synthesize
-from im2vec.tracer import DEFAULT_PARAMS, JPEG_PARAMS
+from im2vec.tracer import JPEG_PARAMS
 
 from test_pairs import BUSY_SVG
 

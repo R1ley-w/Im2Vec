@@ -19,7 +19,6 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import sys
 import urllib.request
 from pathlib import Path
 from typing import List, Optional, TypedDict
@@ -129,7 +128,7 @@ def download_svgs(
             table = batch.to_pydict()
             ids = table[id_col]
             svgs = table[svg_col]
-            for ident, svg in zip(ids, svgs):
+            for ident, svg in zip(ids, svgs, strict=True):
                 (out_dir / f"{_safe_stem(ident)}.svg").write_text(svg, encoding="utf-8")
                 written += 1
                 if n is not None and written >= n:

@@ -33,9 +33,9 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from ..excess import classify_excess
-from ..frontier import SWEEP, VTRACER_DEFAULTS, FrontierPoint, headroom, pareto_front
+from ..frontier import SWEEP, VTRACER_DEFAULTS, FrontierPoint, headroom, pareto_front, sweep_raster
 from ..metrics import render_svg, rgb_over_white
-from ..pairs import count_tokens
+from ..pairs import LADDER, count_tokens
 from ..tracer import JPEG_PARAMS
 from .build_pairs import read_pairs
 
@@ -56,8 +56,6 @@ def _analyse(row: dict) -> Dict[str, object]:
     base = {k: row[k] for k in ("source_key", "dataset", "split", "jpeg_quality")}
     try:
         reference = rgb_over_white(render_svg(row["source_svg"]))
-        from ..frontier import sweep_raster
-
         points = sweep_raster(row["jpeg"], reference)
         report = classify_excess(row["messy_trace"], row["clean_trace"], reference)
     except Exception as exc:  # noqa: BLE001 - record and move on
@@ -74,7 +72,6 @@ def _analyse(row: dict) -> Dict[str, object]:
             "clean_rmse": row["clean_rmse"],
             "clean_paths": row["clean_paths"],
             "messy_tokens": row["messy_tokens"],
-            "messy_rmse_row": row["messy_rmse"],
             "messy_paths": report.messy_paths,
             "excess": report.excess,
             "dropped": report.dropped,
@@ -94,10 +91,10 @@ def _analyse(row: dict) -> Dict[str, object]:
 
 def select_rows(pairs: Path, split: str, subset: str = "ladder", limit: Optional[int] = None) -> List[dict]:
     wanted = (pc.field("split") == split) & (pc.field("subset") == subset)
-    table = read_pairs(pairs, columns=_ROW_COLUMNS, filter=wanted)
+    table = read_pairs(pairs, columns=_ROW_COLUMNS, where=wanted)
     if limit is not None:
         # Keep whole ladders together so every source has all qualities.
-        keys = sorted(set(table.column("source_key").to_pylist()))[: max(1, limit // 5)]
+        keys = sorted(set(table.column("source_key").to_pylist()))[: max(1, limit // len(LADDER))]
         table = table.filter(pc.is_in(table["source_key"], pa.array(keys)))
     return table.to_pylist()
 
@@ -142,6 +139,26 @@ def _quantiles(values: Sequence[float]) -> Dict[str, float]:
             "median": q[2], "p75": q[3], "p90": q[4]}
 
 
+def _image_fronts(sweep: List[dict]) -> Dict[tuple, List[FrontierPoint]]:
+    """Each (source, quality) pair's own frontier."""
+    points: Dict[tuple, List[FrontierPoint]] = {}
+    for r in sweep:
+        points.setdefault((r["source_key"], r["jpeg_quality"]), []).append(
+            FrontierPoint(r["label"], r["tokens"], r["rmse"]))
+    return {k: pareto_front(v) for k, v in points.items()}
+
+
+def _setting_points(sweep: List[dict], stat: str = "median") -> List[FrontierPoint]:
+    """One point per setting: (stat of tokens, stat of RMSE) over all images."""
+    f = np.median if stat == "median" else np.mean
+    by_label: Dict[str, Dict[str, List[float]]] = {}
+    for r in sweep:
+        d = by_label.setdefault(r["label"], {"tokens": [], "rmse": []})
+        d["tokens"].append(r["tokens"])
+        d["rmse"].append(r["rmse"])
+    return [FrontierPoint(l, float(f(d["tokens"])), float(f(d["rmse"]))) for l, d in by_label.items()]
+
+
 def aggregate_curve(sweep: List[dict], excess: List[dict], stat: str = "median") -> Dict[str, object]:
     """Dataset-level frontier: one setting applied to every image, as in Phase 1.
 
@@ -150,12 +167,7 @@ def aggregate_curve(sweep: List[dict], excess: List[dict], stat: str = "median")
     summarised the same way, with headroom measured against the curve.
     """
     f = np.median if stat == "median" else np.mean
-    by_label: Dict[str, Dict[str, List[float]]] = {}
-    for r in sweep:
-        d = by_label.setdefault(r["label"], {"tokens": [], "rmse": []})
-        d["tokens"].append(r["tokens"])
-        d["rmse"].append(r["rmse"])
-    points = [FrontierPoint(l, float(f(d["tokens"])), float(f(d["rmse"]))) for l, d in by_label.items()]
+    points = _setting_points(sweep, stat)
     front = pareto_front(points)
 
     def corner(tokens_key: str, rmse_key: str) -> Dict[str, object]:
@@ -201,19 +213,8 @@ def slack_curve(
     images with a frontier point within the slack, and their headroom), and
     on the median aggregate curve.
     """
-    points: Dict[tuple, List[FrontierPoint]] = {}
-    for r in sweep:
-        points.setdefault((r["source_key"], r["jpeg_quality"]), []).append(
-            FrontierPoint(r["label"], r["tokens"], r["rmse"]))
-    fronts = {k: pareto_front(v) for k, v in points.items()}
-
-    by_label: Dict[str, Dict[str, List[float]]] = {}
-    for r in sweep:
-        d = by_label.setdefault(r["label"], {"tokens": [], "rmse": []})
-        d["tokens"].append(r["tokens"])
-        d["rmse"].append(r["rmse"])
-    aggregate = pareto_front([FrontierPoint(l, float(np.median(d["tokens"])), float(np.median(d["rmse"])))
-                              for l, d in by_label.items()])
+    fronts = _image_fronts(sweep)
+    aggregate = pareto_front(_setting_points(sweep, "median"))
     ref_tokens = float(np.median([e[tokens_key] for e in excess]))
     ref_rmse = float(np.median([e[rmse_key] for e in excess]))
 
@@ -235,16 +236,13 @@ def slack_curve(
 
 def per_image_headroom(sweep: List[dict], excess: List[dict]) -> Dict[str, object]:
     """Headroom per (source, quality) against that image's own frontier."""
-    points: Dict[tuple, List[FrontierPoint]] = {}
-    for r in sweep:
-        points.setdefault((r["source_key"], r["jpeg_quality"]), []).append(
-            FrontierPoint(r["label"], r["tokens"], r["rmse"]))
+    fronts = _image_fronts(sweep)
     out = {}
     for ref, (tk, rk) in {"clean": ("clean_tokens", "clean_rmse"),
                           "dropped_only": ("dropped_only_tokens", "dropped_only_rmse")}.items():
         values, unreachable = [], 0
         for e in excess:
-            h = headroom(pareto_front(points[(e["source_key"], e["jpeg_quality"])]), e[tk], e[rk])
+            h = headroom(fronts[(e["source_key"], e["jpeg_quality"])], e[tk], e[rk])
             if h is None:
                 unreachable += 1
             else:
@@ -338,7 +336,7 @@ def summarise(out: Path, pairs: Optional[Path] = None) -> Dict[str, object]:
         },
     }
     if pairs is not None:
-        ladder = read_pairs(pairs, columns=_CURVE_COLUMNS, filter=pc.field("subset") == "ladder")
+        ladder = read_pairs(pairs, columns=_CURVE_COLUMNS, where=pc.field("subset") == "ladder")
         summary["messiness_curve"] = messiness_curve(ladder.to_pylist())
     (out / "summary.json").write_text(json.dumps(summary, indent=2, default=float) + "\n")
     return summary
