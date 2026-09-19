@@ -92,3 +92,15 @@ def test_app_does_not_require_torch():
     import sys
 
     assert "torch" not in sys.modules
+
+
+def test_stylesheet_lets_the_hidden_attribute_win(client):
+    """Regression for #8: app.js toggles UI with the `hidden` attribute, and
+    elements with their own `display` rule ignore it unless this rule exists.
+    Without it the spinner stays on and empty panels show."""
+    import re
+
+    css = client.get("/static/style.css").text
+    rule = re.search(r"\[hidden\]\s*\{([^}]*)\}", css)
+    assert rule, "style.css needs a [hidden] rule"
+    assert re.search(r"display\s*:\s*none\s*!important", rule.group(1))

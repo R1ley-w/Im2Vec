@@ -1,3 +1,10 @@
+/* app.js toggles UI state with the `hidden` attribute. Elements below set
+   their own `display`, which would otherwise override the browser's built-in
+   [hidden] rule and leave them visible (#8). */
+[hidden] {
+  display: none !important;
+}
+
 :root {
   --bg: #f7f8fa;
   --panel: #ffffff;
