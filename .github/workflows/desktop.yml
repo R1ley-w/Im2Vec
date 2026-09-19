@@ -51,12 +51,15 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-desktop.txt pyinstaller pytest httpx
-          if [ "$RUNNER_OS" = "Linux" ]; then pip install "pywebview[qt]"; fi
-          pip freeze
+          # numpy is test-only (tests build noisy images with it); the spec
+          # excludes it from the bundle.
+          python -m pip install -r requirements-desktop.txt pyinstaller pytest httpx numpy
+          if [ "$RUNNER_OS" = "Linux" ]; then python -m pip install "pywebview[qt]"; fi
+          python -m pip freeze
 
       - name: Test (desktop-relevant suites)
-        run: pytest tests/test_desktop.py tests/test_app.py tests/test_tracer.py tests/test_raster.py -q
+        # python -m puts the repo root on sys.path; bare pytest does not.
+        run: python -m pytest tests/test_desktop.py tests/test_app.py tests/test_tracer.py tests/test_raster.py -q
 
       - name: Build
         run: pyinstaller packaging/im2vec.spec --noconfirm
