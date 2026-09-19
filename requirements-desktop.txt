@@ -1,0 +1,10 @@
+# Desktop app runtime -- the only packages bundled by packaging/im2vec.spec.
+# Deliberately minimal: the conversion path needs just Pillow + vtracer, and
+# dev/dataset tooling (gradio, scipy, cairosvg, pyarrow) must stay out of the
+# bundle. On Linux, also install "pywebview[qt]" for a window backend.
+vtracer
+Pillow
+fastapi
+uvicorn
+python-multipart
+pywebview

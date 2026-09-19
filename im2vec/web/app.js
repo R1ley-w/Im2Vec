@@ -79,8 +79,21 @@ async function convertFile(file) {
   }
 }
 
-function downloadSvg() {
+async function downloadSvg() {
   if (!currentSvg) return;
+
+  // Desktop app: embedded webviews don't reliably honour <a download>, so
+  // save through the native Save dialog exposed by im2vec/desktop.py.
+  const desktop = window.pywebview && window.pywebview.api;
+  if (desktop && desktop.save_svg) {
+    try {
+      await desktop.save_svg(currentSvg, `${currentName}.svg`);
+    } catch (err) {
+      showError(`Could not save the file: ${err.message || err}`);
+    }
+    return;
+  }
+
   const blob = new Blob([currentSvg], { type: "image/svg+xml" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");

@@ -9,6 +9,45 @@ deterministic, CPU-only, milliseconds per image, no model and no GPU.
 > abandoned after measurement — see [Background](#background--the-retired-model)
 > below, and [`CONTEXT.md`](CONTEXT.md) for the vocabulary used throughout.
 
+## Download the desktop app
+
+Grab the file for your system from the
+[latest release](https://github.com/R1ley-w/Im2Vec/releases/latest) — no
+Python or terminal needed. It runs fully offline; images never leave your
+machine.
+
+| System | File |
+|---|---|
+| macOS (Apple Silicon) | `Im2Vec-macOS-AppleSilicon.dmg` — open it and drag **Im2Vec** to Applications |
+| Windows 10/11 (64-bit) | `Im2Vec-Windows-x64.exe` — run it directly |
+| Linux (x86-64) | `Im2Vec-Linux-x64.tar.gz` — extract, then run `./Im2Vec` |
+
+**First launch warnings.** The builds are not code-signed, so your OS will
+warn once:
+
+- **macOS** says the app is from an unidentified developer. Right-click (or
+  Control-click) **Im2Vec** → **Open** → **Open**. On recent macOS versions you
+  may instead need **System Settings → Privacy & Security → Open Anyway**.
+- **Windows** SmartScreen says "Windows protected your PC". Click **More info →
+  Run anyway**.
+- **Linux** shows no warning.
+
+After the first launch it opens normally.
+
+### Building it yourself
+
+```bash
+pip install -r requirements-desktop.txt pyinstaller   # Linux: also pip install "pywebview[qt]"
+python -m im2vec.desktop                               # run from source
+pyinstaller packaging/im2vec.spec --noconfirm          # build dist/
+dist/Im2Vec.app/Contents/MacOS/Im2Vec --self-test      # or dist/Im2Vec(.exe) --self-test
+```
+
+PyInstaller can't cross-compile, so each platform is built on that platform.
+[`.github/workflows/desktop.yml`](.github/workflows/desktop.yml) builds all
+three on every `v*` tag, self-tests each frozen binary, and attaches them to
+the release.
+
 ## Approach
 
 Tracing trades **fidelity** (how closely the result matches the source pixels)
@@ -48,6 +87,7 @@ im2vec/
   tokenizer.py       # SVG <-> token sequence; used to measure compactness
   app.py             # FastAPI app + static frontend
   gradio_app.py      # Gradio app
+  desktop.py         # desktop launcher: app.py in a native window
   pairs.py           # (clean, messy) trace pair synthesis
   frontier.py        # classical frontier over tracer settings
   excess.py          # droppable / mergeable / distorted excess paths
@@ -57,6 +97,7 @@ im2vec/
     prepare.py       # one-command download + render
     build_pairs.py   # build the trace-pair dataset (parquet)
     analyze_pairs.py # frontier + excess measurements over the pairs
+packaging/           # PyInstaller spec + entry script for the desktop app
 tests/
 ```
 
@@ -69,7 +110,7 @@ Everything runs in a plain Python environment — no torch, no CUDA. Use
 pip install -r requirements.txt
 ```
 
-## Web app
+## Web app (self-hosted)
 
 Two self-hosted frontends, both calling `trace_svg()`. Neither loads a model,
 so there is no checkpoint to download and no cold start — a plain CPU box is

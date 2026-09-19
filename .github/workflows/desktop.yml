@@ -1,0 +1,124 @@
+name: Desktop app
+
+# workflow_dispatch: build all platforms and keep the results as workflow
+#   artifacts (for testing a build before anything is published).
+# v* tag: the same, plus a GitHub Release with the builds attached.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            asset: Im2Vec-macOS-AppleSilicon.dmg
+            exe: dist/Im2Vec.app/Contents/MacOS/Im2Vec
+          - os: windows-latest
+            asset: Im2Vec-Windows-x64.exe
+            exe: dist/Im2Vec.exe
+          # Oldest supported runner: a binary built against an older glibc
+          # runs on more distributions than one built against a newer one.
+          - os: ubuntu-22.04
+            asset: Im2Vec-Linux-x64.tar.gz
+            exe: dist/Im2Vec
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Linux window-backend libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libegl1 libgl1 libxkbcommon-x11-0 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 \
+            libxcb-xinerama0 libxcb-randr0 libxcb-render-util0 libnss3 \
+            libxcomposite1 libxdamage1 libxrandr2 libxtst6 libasound2
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-desktop.txt pyinstaller pytest httpx
+          if [ "$RUNNER_OS" = "Linux" ]; then pip install "pywebview[qt]"; fi
+          pip freeze
+
+      - name: Test (desktop-relevant suites)
+        run: pytest tests/test_desktop.py tests/test_app.py tests/test_tracer.py tests/test_raster.py -q
+
+      - name: Build
+        run: pyinstaller packaging/im2vec.spec --noconfirm
+
+      - name: Self-test the frozen build
+        if: runner.os != 'Windows'
+        run: ${{ matrix.exe }} --self-test
+
+      - name: Self-test the frozen build (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        # A windowed .exe detaches from the shell; wait for its exit code.
+        run: |
+          $p = Start-Process -FilePath "dist\Im2Vec.exe" -ArgumentList "--self-test" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "self-test failed with exit code $($p.ExitCode)" }
+
+      - name: Check the window opens and stays up
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run -a ${{ matrix.exe }} & pid=$!
+          else
+            ${{ matrix.exe }} & pid=$!
+          fi
+          sleep 15
+          if kill -0 "$pid" 2>/dev/null; then
+            echo "window still running after 15s"
+            kill "$pid" || true
+          else
+            wait "$pid"; echo "app exited early with status $?"; exit 1
+          fi
+
+      - name: Package
+        run: |
+          case "$RUNNER_OS" in
+            macOS)   hdiutil create -volname Im2Vec -srcfolder dist/Im2Vec.app -ov -format UDZO "${{ matrix.asset }}" ;;
+            Windows) cp dist/Im2Vec.exe "${{ matrix.asset }}" ;;
+            Linux)   tar -czf "${{ matrix.asset }}" -C dist Im2Vec ;;
+          esac
+          ls -la "${{ matrix.asset }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" assets/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Im2Vec $GITHUB_REF_NAME" \
+            --generate-notes
